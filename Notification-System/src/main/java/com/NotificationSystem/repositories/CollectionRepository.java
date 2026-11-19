@@ -19,6 +19,8 @@ public interface CollectionRepository extends JpaRepository<Collection, Long> {
 
     List<Collection> findByStatus(Collection.Status status);
 
+    Optional<Collection> findFirstByScheduleIdAndResidentId(Long scheduleId, Long residentId);
+
     List<Collection> findByScheduleIdAndResidentId(
             Long scheduleId,
             Long residentId

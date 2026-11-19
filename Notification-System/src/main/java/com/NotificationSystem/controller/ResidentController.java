@@ -38,7 +38,6 @@ public class ResidentController {
                 residentService.getResidentsByZoneId(zoneId)
         );
     }
-
     @PostMapping
     public ResponseEntity<Resident> createResident(
             @Valid @RequestBody Resident resident) {

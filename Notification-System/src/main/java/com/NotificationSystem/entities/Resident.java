@@ -35,6 +35,16 @@ public class Resident {
     @JoinColumn(name = "zone_id", nullable = false)
     private Zone zone;
 
+    @ManyToOne
+    @JoinColumn(name = "building_id")
+    private Building building;
+
+    @Column(length = 30)
+    private String unitNumber;
+
+    @Column(length = 150)
+    private String email;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 

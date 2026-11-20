@@ -14,4 +14,8 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
 
     List<Resident> findByZone_Id(Long zoneId);
 
+    boolean existsByZone_IdAndPhoneNumber(Long zoneId, String phoneNumber);
+
+    boolean existsByZone_IdAndPhoneNumberAndIdNot(Long zoneId, String phoneNumber, Long id);
+
 }

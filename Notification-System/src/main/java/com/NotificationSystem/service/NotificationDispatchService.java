@@ -12,6 +12,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -82,6 +84,14 @@ public class NotificationDispatchService {
                                                       Notification.NoticeType type) {
         Schedule schedule = scheduleRepository.findById(scheduleId)
                 .orElseThrow(() -> new RuntimeException("Schedule not found"));
+
+        if (type == Notification.NoticeType.SCHEDULED
+                && (schedule.getStatus() == Schedule.Status.CANCELLED
+                || schedule.getStatus() == Schedule.Status.COMPLETED)) {
+            log.warn("Dispatch: refused to notify schedule {}, it is {}", scheduleId, schedule.getStatus());
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Cannot send reminders: this schedule is " + schedule.getStatus());
+        }
 
         LocalDate noticeDate = schedule.getCollectionDate();
         List<Resident> residents = residentRepository.findByZone_Id(schedule.getZone().getId());

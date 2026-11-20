@@ -4,6 +4,7 @@ import com.NotificationSystem.entities.Notification;
 import com.NotificationSystem.entities.Schedule;
 import com.NotificationSystem.service.NotificationDispatchService;
 import com.NotificationSystem.service.ScheduleService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -11,11 +12,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
 @RestController
 @RequestMapping("/schedules")
 public class ScheduleController {
@@ -61,14 +64,34 @@ public class ScheduleController {
             @RequestBody Schedule updatedSchedule) {
 
         Optional<Schedule> existing = scheduleService.getScheduleById(id);
-
-        if (existing.isPresent()) {
-            updatedSchedule.setId(id);
-            Schedule saved = scheduleService.saveSchedule(updatedSchedule);
-            return ResponseEntity.ok(saved);
-        } else {
+        if (existing.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
+
+        // Copy the old values first: saving updates the same loaded object
+        LocalDate oldDate = existing.get().getCollectionDate();
+        Schedule.Status oldStatus = existing.get().getStatus();
+
+        updatedSchedule.setId(id);
+        Schedule saved = scheduleService.saveSchedule(updatedSchedule);
+
+        Notification.NoticeType notice = null;
+        if (saved.getStatus() == Schedule.Status.CANCELLED && oldStatus != Schedule.Status.CANCELLED) {
+            notice = Notification.NoticeType.CANCELLED;
+        } else if (saved.getStatus() != Schedule.Status.CANCELLED
+                && oldDate != null && !oldDate.equals(saved.getCollectionDate())) {
+            notice = Notification.NoticeType.UPDATED;
+        }
+
+        if (notice != null) {
+            try {
+                notificationDispatchService.notifyScheduleChange(saved.getId(), notice);
+            } catch (Exception e) {
+                // The schedule is already saved; a failed notice must not undo it
+                log.warn("Could not send {} notice for schedule {}: {}", notice, id, e.getMessage());
+            }
+        }
+        return ResponseEntity.ok(saved);
     }
 
     @DeleteMapping("/{id}")

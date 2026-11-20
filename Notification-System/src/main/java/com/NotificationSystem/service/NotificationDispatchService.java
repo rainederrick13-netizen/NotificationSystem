@@ -13,8 +13,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,57 +41,98 @@ public class NotificationDispatchService {
     @Value("${whatsapp.mode:text}")
     private String whatsappMode;
 
+    // Original "notify this zone" action
     public Map<String, Object> queueZoneNotifications(Long scheduleId, Notification.Channel channel) {
+        return queueZoneNotifications(scheduleId, channel, Notification.NoticeType.SCHEDULED);
+    }
+
+    // Used when a schedule is rescheduled or cancelled. Only residents who were
+    // already told about this schedule are contacted, and only on the channel(s) used.
+    public Map<String, Object> notifyScheduleChange(Long scheduleId, Notification.NoticeType type) {
+        Set<Notification.Channel> channels = notificationRepository.findBySchedule_Id(scheduleId).stream()
+                .filter(n -> n.getStatus() != Notification.Status.FAILED)
+                .map(Notification::getChannel)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (channels.isEmpty()) {
+            log.info("Dispatch: schedule {} changed ({}), residents were never notified, nothing to send",
+                    scheduleId, type);
+            result.put("queued", 0);
+            result.put("duplicatesPrevented", 0);
+            result.put("message", "Residents had not been notified yet, so no update was sent");
+            return result;
+        }
+
+        int queued = 0;
+        int duplicates = 0;
+        for (Notification.Channel channel : channels) {
+            Map<String, Object> r = queueZoneNotifications(scheduleId, channel, type);
+            queued += (int) r.get("queued");
+            duplicates += (int) r.get("duplicatesPrevented");
+        }
+        result.put("queued", queued);
+        result.put("duplicatesPrevented", duplicates);
+        result.put("message", type + " notice queued for " + queued + " resident(s)");
+        return result;
+    }
+
+    public Map<String, Object> queueZoneNotifications(Long scheduleId,
+                                                      Notification.Channel channel,
+                                                      Notification.NoticeType type) {
         Schedule schedule = scheduleRepository.findById(scheduleId)
                 .orElseThrow(() -> new RuntimeException("Schedule not found"));
 
+        LocalDate noticeDate = schedule.getCollectionDate();
         List<Resident> residents = residentRepository.findByZone_Id(schedule.getZone().getId());
-        List<Notification> existing = notificationRepository.findBySchedule_Id(scheduleId);
-        Set<Long> alreadyNotified = existing.stream()
-                .filter(n -> n.getChannel() == channel && n.getStatus() != Notification.Status.FAILED)
-                .map(n -> n.getResident().getId())
-                .collect(Collectors.toSet());
 
-        List<Resident> toNotify = residents.stream()
-                .filter(r -> {
-                    boolean duplicate = alreadyNotified.contains(r.getId());
-                    if (duplicate) {
-                        log.info("Dispatch: skipped resident {} on schedule {} ({}), already notified",
-                                r.getId(), scheduleId, channel);
-                    }
-                    return !duplicate;
-                })
-                .toList();
+        // Same schedule + channel + type + date = the same notice
+        Map<Long, Notification> sameNotice = notificationRepository.findBySchedule_Id(scheduleId).stream()
+                .filter(n -> n.getChannel() == channel
+                        && n.getNoticeType() == type
+                        && noticeDate.equals(n.getNoticeDate()))
+                .collect(Collectors.toMap(n -> n.getResident().getId(), n -> n, (a, b) -> a));
 
         String zoneName = schedule.getZone().getName();
         LocalDateTime now = LocalDateTime.now();
+        List<Notification> toSave = new ArrayList<>();
+        int duplicatesPrevented = 0;
 
-        List<Notification> queued = toNotify.stream().map(resident -> {
+        for (Resident resident : residents) {
+            Notification prev = sameNotice.get(resident.getId());
+
+            if (prev != null && prev.getStatus() != Notification.Status.FAILED) {
+                duplicatesPrevented++;
+                log.info("Dispatch: skipped resident {} on schedule {} ({}, {}), already notified",
+                        resident.getId(), scheduleId, channel, type);
+                continue;
+            }
+
             String name = resident.getName() == null ? "" : resident.getName().trim();
             String firstName = name.isEmpty() ? "resident" : name.split("\\s+")[0];
+            String text = buildMessage(firstName, zoneName, type, noticeDate);
 
-            String messageText = "Hello " + firstName + ", waste collection for "
-                    + zoneName + " zone is scheduled on "
-                    + schedule.getCollectionDate() + ". Please have your waste ready.";
-
-            Notification n = new Notification();
+            // A failed notice is reused, not duplicated, so the unique index is never violated
+            Notification n = prev != null ? prev : new Notification();
             n.setSchedule(schedule);
             n.setResident(resident);
             n.setPhoneNumber(resident.getPhoneNumber());
-            n.setMessage(messageText);
+            n.setMessage(text);
             n.setChannel(channel);
+            n.setNoticeType(type);
+            n.setNoticeDate(noticeDate);
             n.setStatus(Notification.Status.PENDING);
-            n.setCreatedAt(now);
+            n.setErrorCode(null);
+            n.setErrorDetail(null);
+            if (prev == null) n.setCreatedAt(now);
             n.setUpdatedAt(now);
-            return n;
-        }).toList();
+            toSave.add(n);
+        }
 
-        List<Notification> saved = notificationRepository.saveAll(queued);
+        List<Notification> saved = notificationRepository.saveAll(toSave);
 
-        int duplicatesPrevented = residents.size() - toNotify.size();
-
-        log.info("Dispatch: schedule {} via {}: {} residents in zone, {} queued, {} skipped",
-                scheduleId, channel, residents.size(), saved.size(), duplicatesPrevented);
+        log.info("Dispatch: schedule {} via {} ({}): {} residents in zone, {} queued, {} skipped",
+                scheduleId, channel, type, residents.size(), saved.size(), duplicatesPrevented);
 
         dispatchAsync(saved);
 
@@ -100,6 +144,27 @@ public class NotificationDispatchService {
                 + " resident(s) already notified for this schedule"
                 : "All residents queued");
         return result;
+    }
+
+    private String buildMessage(String firstName, String zoneName,
+                                Notification.NoticeType type, LocalDate date) {
+        return switch (type) {
+            case SCHEDULED -> "Hello " + firstName + ", waste collection for " + zoneName
+                    + " zone is scheduled on " + date + ". Please have your waste ready.";
+            case UPDATED -> "Hello " + firstName + ", the waste collection for " + zoneName
+                    + " zone has been moved to " + date + ". Please have your waste ready then.";
+            case CANCELLED -> "Hello " + firstName + ", the waste collection for " + zoneName
+                    + " zone on " + date + " has been cancelled. We will notify you of the new date.";
+        };
+    }
+
+    // Only needed when whatsapp.mode=template. Create these templates in Meta first.
+    private String templateName(Notification.NoticeType type) {
+        return switch (type) {
+            case SCHEDULED -> "collection_reminder";
+            case UPDATED -> "collection_updated";
+            case CANCELLED -> "collection_cancelled";
+        };
     }
 
     @Async
@@ -118,12 +183,11 @@ public class NotificationDispatchService {
                 } else {
                     String response;
                     if ("template".equalsIgnoreCase(whatsappMode)) {
-                        String collectionDate = n.getSchedule().getCollectionDate().toString();
                         response = whatsAppService.sendTemplateMessage(
                                 n.getPhoneNumber(),
-                                "collection_reminder",
+                                templateName(n.getNoticeType()),
                                 "en",
-                                collectionDate
+                                n.getNoticeDate().toString()
                         );
                     } else {
                         response = whatsAppService.sendMessage(n.getPhoneNumber(), n.getMessage());

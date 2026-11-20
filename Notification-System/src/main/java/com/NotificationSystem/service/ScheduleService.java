@@ -112,7 +112,7 @@ public class ScheduleService {
 
     public void deleteSchedule(Long id) {
         log.info("Delete requested for schedule {}", id);
-        if (notificationRepository.existsById(id)) {
+        if (notificationRepository.existsBySchedule_Id(id)) {
             log.warn("Delete blocked for schedule {}: notifications exist", id);
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "This schedule already has notification, so it can't deleted. Cancel it instead");

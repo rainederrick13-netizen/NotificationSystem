@@ -3,6 +3,7 @@ package com.NotificationSystem.entities;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
@@ -46,6 +47,12 @@ public class Notification {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "notice_type", nullable = false)
+    private NoticeType noticeType = NoticeType.SCHEDULED;
+
+    @Column(name = "notice_date", nullable = false)
+    private LocalDate noticeDate;
 
     @Column(nullable = false)
     private LocalDateTime updatedAt = LocalDateTime.now();
@@ -58,10 +65,15 @@ public class Notification {
         READ
     }
 
-
     public enum Channel {
         SMS,
         WHATSAPP
+    }
+
+    public enum NoticeType {
+        SCHEDULED,
+        UPDATED,
+        CANCELLED
     }
 
     @Column(name = "whatsapp_message_id")

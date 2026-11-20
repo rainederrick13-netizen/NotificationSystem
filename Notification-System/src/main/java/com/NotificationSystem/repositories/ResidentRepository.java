@@ -14,5 +14,4 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
 
     List<Resident> findByZone_Id(Long zoneId);
 
-    List<Resident> findByBuilding_Id(Long buildingId);
 }

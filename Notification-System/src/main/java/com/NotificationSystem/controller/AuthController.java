@@ -136,7 +136,6 @@ public class AuthController {
     }
 
 
-
     @PostMapping("/register")
     public ResponseEntity<?> registerUser(@RequestBody User user) {
 
@@ -147,10 +146,14 @@ public class AuthController {
         if (user.getPassword() == null || user.getPassword().length() < 8) {
             return ResponseEntity.badRequest().body("Password must be at least 8 characters");
         }
+        if (user.getName() == null || user.getName().isBlank()) {
+            return ResponseEntity.badRequest().body("Enter a name");
+        }
         if (userRepository.findByEmail(email).isPresent()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body("Email already exists");
         }
 
+        user.setId(null);   // never let the request choose an id
         user.setEmail(email);
         user.setRole(User.Role.STAFF);
         user.setPassword(passwordEncoder.encode(user.getPassword()));
@@ -161,7 +164,6 @@ public class AuthController {
                 .status(HttpStatus.CREATED)
                 .body("User registered successfully as " + savedUser.getRole().name());
     }
-
 
     @GetMapping("/me")
     public ResponseEntity<?> getCurrentUser(Authentication authentication) {
